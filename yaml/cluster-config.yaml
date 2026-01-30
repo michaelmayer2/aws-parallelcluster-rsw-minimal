@@ -1,0 +1,144 @@
+HeadNode:
+  InstanceType: t3.xlarge
+  Networking: 
+    SubnetId: ${POSIT_SUBNET_ID}
+  LocalStorage:
+    RootVolume:
+      Size: 120 
+  SharedStorageType: Efs
+  SharedStorageEfsSettings:
+    Encrypted: true
+  Iam: 
+    S3Access: 
+      - BucketName: ${S3_BUCKET_NAME}
+    AdditionalIamPolicies:
+      - Policy: ${EC2_RUNINSTANCES_IAM_POLICY_ARN}
+      - Policy: ${ELB_IAM_POLICY_ARN}
+  CustomActions:
+    OnNodeConfigured:
+      Script: s3://${S3_BUCKET_NAME}/install-head-node.sh
+      Args:
+        - "${PWB_VERSION}"
+        - "${S3_BUCKET_NAME}"
+Image:
+  Os: rocky9
+  CustomAmi: ${AWS_PC_AMI}
+Region: eu-west-1
+Scheduling: 
+  Scheduler: slurm
+  SlurmSettings:
+    # below settings gets compatibility with shared VPC
+    Dns:
+      DisableManagedDns: true
+      UseEc2Hostnames: true
+    EnableMemoryBasedScheduling: true 
+  SlurmQueues: 
+    - Name: interactive
+      ComputeResources:
+        - Name: rstudio 
+          InstanceType: t3.xlarge
+          MaxCount: 5
+          MinCount: 1
+          Efa:
+            Enabled: FALSE
+      Iam: 
+        S3Access: 
+          - BucketName: ${S3_BUCKET_NAME}
+      CustomActions:
+        OnNodeConfigured:
+          Script: s3://${S3_BUCKET_NAME}/install-compute-node.sh
+      Networking:
+        PlacementGroup:
+          Enabled: FALSE
+        SubnetIds:
+          - ${POSIT_SUBNET_ID}
+
+    - Name: all 
+      ComputeResources:
+        - Name: rstudio 
+          InstanceType: t3.xlarge
+          MaxCount: 10
+          MinCount: 0
+          Efa:
+            Enabled: FALSE
+      Iam: 
+        S3Access: 
+          - BucketName: ${S3_BUCKET_NAME}
+      CustomActions:
+        OnNodeConfigured:
+          Script: s3://${S3_BUCKET_NAME}/install-compute.sh
+      Networking:
+        PlacementGroup:
+          Enabled: FALSE
+        SubnetIds:
+          - ${POSIT_SUBNET_ID}
+
+    - Name: gpu 
+      ComputeResources:
+        - Name: large
+          InstanceType: g4dn.xlarge 
+          MaxCount: 1 
+          MinCount: 0
+          Efa:
+            Enabled: FALSE
+      Iam: 
+        S3Access: 
+          - BucketName: ${S3_BUCKET_NAME}
+      CustomActions:
+        OnNodeConfigured:
+          Script: s3://${S3_BUCKET_NAME}/install-compute.sh
+      Networking:
+        PlacementGroup:
+          Enabled: FALSE
+        SubnetIds: 
+          - ${POSIT_SUBNET_ID}
+
+
+LoginNodes:
+  Pools:
+    - Name: login
+      Count: 2 
+      InstanceType: t3.xlarge
+      Networking:
+        SubnetIds: 
+          - ${POSIT_SUBNET_ID}
+        AdditionalSecurityGroups:
+          - ${PWB_LOGIN_SG_ID}
+      Iam:
+        AdditionalIamPolicies:
+          - Policy: ${S3_IAM_POLICY_ARN}
+      CustomActions:
+        OnNodeConfigured:
+          Script: s3://aws-pc-scripts-${USER}/install-login-node.sh
+          Args:
+            - "${PWB_VERSION}"
+
+DevSettings:
+  Timeouts:
+    HeadNodeBootstrapTimeout: 7200  # timeout in seconds
+    ComputeNodeBootstrapTimeout: 7200  # timeout in seconds
+
+SharedStorage:
+  - MountDir: /home
+    Name: home
+    StorageType: FsxLustre
+    FsxLustreSettings:
+      StorageCapacity: 1200
+      DeploymentType: SCRATCH_2
+  - MountDir: /opt/rstudio
+    Name: rstudio
+    StorageType: Efs
+    EfsSettings:
+      Encrypted: true
+      EncryptionInTransit: true
+
+
+Tags:
+  - Key: rs:environment
+    Value: development
+  - Key: rs:owner
+    Value: michael.mayer@posit.co
+  - Key: rs:project
+    Value: solutions
+  - Key: rs:subsystem
+    Value: aws-pc-testing

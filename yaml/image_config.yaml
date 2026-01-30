@@ -1,0 +1,15 @@
+Build:
+  # we need some GPUish instance 
+  InstanceType: g5.2xlarge 
+  # ROCKY 9 Marketplace AMI
+  ParentImage: ${ROCKY9_AMI} 
+  # Subnet ID
+  SubnetId: ${POSIT_SUBNET_ID}
+  # Security Group ID - can be anything random 
+  SecurityGroupIds:
+    - ${PWB_DB_SG_ID}
+  # We don't want to update OS packages to save time 
+  UpdateOsPackages:
+    Enabled: false 
+  Imds:
+    ImdsSupport: v2.0
