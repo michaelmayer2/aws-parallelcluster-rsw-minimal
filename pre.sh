@@ -115,7 +115,9 @@ envsubst < etc/rstudio/audit-database.conf.tmpl > etc/rstudio/audit-database.con
 
 # Tar up the etc/rstudio.files 
 
+cd scripts 
 tar cfz etc-rstudio.tgz  etc/rstudio
+cd .. 
 
 ### S3 bucket
 

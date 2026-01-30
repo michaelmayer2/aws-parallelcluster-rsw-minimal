@@ -1,0 +1,5 @@
+echo `uuidgen` > /etc/rstudio/secure-cookie-key
+chmod 0600 /etc/rstudio/secure-cookie-key
+openssl genpkey -algorithm RSA -out /etc/rstudio/launcher.pem -pkeyopt rsa_keygen_bits:2048
+openssl rsa -in /etc/rstudio/launcher.pem -pubout > /etc/rstudio/launcher.pub
+chmod 0600 /etc/rstudio/launcher.pem

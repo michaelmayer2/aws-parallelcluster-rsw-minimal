@@ -1,0 +1,2 @@
+APPTAINER_BIND=/opt/slurm/etc,/opt/slurm/libexec,/var/spool/slurmd,/var/run/munge
+SINGULARITY_BIND=/opt/slurm/etc,/opt/slurm/libexec,/var/spool/slurmd,/var/run/munge
