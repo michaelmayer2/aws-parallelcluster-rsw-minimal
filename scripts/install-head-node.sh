@@ -252,7 +252,7 @@ Description=Sync ALB targets with NLB
 
 [Service]
 Type=oneshot
-ExecStart=/opt/rstudio/scripts/alb-cron.sh $CLUSTER_NAME $ALB_TG_NAME
+ExecStart=/opt/rstudio/scripts/alb-cron.sh $CLUSTER_NAME pwb-login-nodes-tg
 EOF
 
 cat << EOF > /etc/systemd/system/sync-alb-targets.timer

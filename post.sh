@@ -1,6 +1,4 @@
-export AWS_PC_CLUSTER="rocky97"
-
-NLB_DNS=$(pcluster describe-cluster --cluster-name $AWS_PC_CLUSTER | jq -r '.loginNodes[0].address')
+NLB_DNS=$(pcluster describe-cluster --cluster-name ${AWS_PC_CLUSTER} | jq -r '.loginNodes[0].address')
 
 # Get the hosted zone ID for your domain
 HOSTED_ZONE_ID=$(aws route53 list-hosted-zones-by-name \
