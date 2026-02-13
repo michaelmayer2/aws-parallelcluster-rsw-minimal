@@ -32,8 +32,15 @@ aws route53 change-resource-record-sets \
 
 #### EFS Backup Configuration (daily, 3-day retention)
 
-# Get the EFS file system ID from the cluster
-EFS_ID=$(pcluster describe-cluster --cluster-name ${AWS_PC_CLUSTER} | jq -r '.sharedStorage[] | select(.mountDir=="/opt/rstudio") | .efsSettings.fileSystemId // .storageId' 2>/dev/null)
+# Get the EFS file system IDs from the cluster
+EFS_IDS=$(aws efs describe-file-systems \
+    --query "FileSystems[?Tags[?Key=='parallelcluster:cluster-name' && Value=='${AWS_PC_CLUSTER}']].FileSystemId" \
+    --output text)
+
+# Get the EFS file system ARNs from the cluster
+EFS_ARNS=$(aws efs describe-file-systems \
+    --query "FileSystems[?Tags[?Key=='parallelcluster:cluster-name' && Value=='${AWS_PC_CLUSTER}']].FileSystemArn" \
+    --output text)
 
 # Create backup vault (if not exists)
 aws backup create-backup-vault \
@@ -66,16 +73,15 @@ fi
 # Get AWS account ID
 ACCOUNT_ID=$(aws sts get-caller-identity --query 'Account' --output text)
 
-# Get EFS ARN
-EFS_ARN="arn:aws:elasticfilesystem:eu-west-1:${ACCOUNT_ID}:file-system/${EFS_ID}"
-
 # Assign the EFS to the backup plan
-aws backup create-backup-selection \
-    --backup-plan-id $BACKUP_PLAN_ID \
-    --backup-selection '{
-        "SelectionName": "efs-selection",
-        "IamRoleArn": "arn:aws:iam::'"$ACCOUNT_ID"':role/aws-service-role/backup.amazonaws.com/AWSServiceRoleForBackup",
-        "Resources": ["'"$EFS_ARN"'"]
-    }'
+for EFS_ARN in $EFS_ARNS; do
+    aws backup create-backup-selection \
+        --backup-plan-id $BACKUP_PLAN_ID \
+        --backup-selection '{
+            "SelectionName": "efs-selection-'"$(basename $EFS_ARN)"'",
+            "IamRoleArn": "arn:aws:iam::'"$ACCOUNT_ID"':role/aws-service-role/backup.amazonaws.com/AWSServiceRoleForBackup",
+            "Resources": ["'"$EFS_ARN"'"]
+        }'
+done
 
 echo "EFS backup configured: daily at 05:00 UTC, 3-day retention"
