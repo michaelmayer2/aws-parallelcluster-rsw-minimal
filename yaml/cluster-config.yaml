@@ -14,6 +14,8 @@ HeadNode:
     AdditionalIamPolicies:
       - Policy: ${EC2_RUNINSTANCES_IAM_POLICY_ARN}
       - Policy: ${ELB_IAM_POLICY_ARN}
+  Ssh: 
+    AllowedIps: "${CIDR_RANGE}"
   CustomActions:
     OnNodeConfigured:
       Script: s3://${S3_BUCKET_NAME}/install-head-node.sh
