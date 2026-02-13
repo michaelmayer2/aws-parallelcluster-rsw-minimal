@@ -72,3 +72,7 @@ pcluster create-cluster -n $CLUSTER_NAME -c cluster-config-final.yaml  --rollbac
 Once the parallecluster env has been built successfully, you can run [post.sh](post.sh) in order to create a DNS alias `hpclogin.pcluster.soleng.posit.it` that will forward to the NLB of AWS Parallelcluster. This URL is available for SSH access. Given the fact this is an NLB, an ssh connection to this URL will be automatically distributed on one of the login nodes. 
 
 In addition, an EFS backup policy will be created and activated for the EFS file systems used by AWS ParallelCluster in order to satisfy some local security regulations.
+
+# Clean-up
+
+After you tear down the cluster, you can use `delete.sh` to remove the auxiliary infrastructure such as IAM roles, security groups etc... 

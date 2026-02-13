@@ -34,12 +34,12 @@ aws route53 change-resource-record-sets \
 
 # Get the EFS file system IDs from the cluster
 EFS_IDS=$(aws efs describe-file-systems \
-    --query "FileSystems[?Tags[?Key=='parallelcluster:cluster-name' && Value=='${AWS_PC_CLUSTER}']].FileSystemId" \
+    --query "FileSystems[?Tags[?Key=='parallelcluster:cluster-name' && Value=='${CLUSTER_NAME}']].FileSystemId" \
     --output text)
 
 # Get the EFS file system ARNs from the cluster
 EFS_ARNS=$(aws efs describe-file-systems \
-    --query "FileSystems[?Tags[?Key=='parallelcluster:cluster-name' && Value=='${AWS_PC_CLUSTER}']].FileSystemArn" \
+    --query "FileSystems[?Tags[?Key=='parallelcluster:cluster-name' && Value=='${CLUSTER_NAME}']].FileSystemArn" \
     --output text)
 
 # Create backup vault (if not exists)
