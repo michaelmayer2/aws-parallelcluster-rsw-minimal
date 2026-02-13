@@ -74,6 +74,67 @@ popd
 rm -rf $tempdir
 
 
+
+# Redirect all output to log file
+exec > >(tee -a /var/log/head-node.log) 2>&1
+
+set -x 
+
+# Deploy config files
+
+mkdir -p /opt/rstudio/scripts
+
+aws s3 cp s3://$S3_BUCKET_NAME/alb-cron.sh /opt/rstudio/scripts 
+chmod +x  /opt/rstudio/scripts/alb-cron.sh
+
+# create systemd timer for cron job
+cat << EOF > /etc/systemd/system/sync-alb-targets.service
+# /etc/systemd/system/sync-alb-targets.service
+[Unit]
+Description=Sync ALB targets with NLB
+
+[Service]
+Type=oneshot
+ExecStart=/opt/rstudio/scripts/alb-cron.sh $CLUSTER_NAME pwb-login-nodes-tg
+EOF
+
+cat << EOF > /etc/systemd/system/sync-alb-targets.timer
+# /etc/systemd/system/sync-alb-targets.timer
+[Unit]
+Description=Run ALB sync every 5 minutes
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=5min
+
+[Install]
+WantedBy=timers.target
+EOF
+
+systemctl daemon-reload 
+systemctl enable --now sync-alb-targets.timer
+
+# Deal with Posit Workbench config files
+# We deploy them in /opt/rstudio/etc/rstudio here and then have the login nodes simply copy them from here 
+
+POSIT_CONFIG_DIR=/opt/rstudio/etc/rstudio
+
+mkdir -p $POSIT_CONFIG_DIR
+
+echo `uuidgen` > $POSIT_CONFIG_DIR/secure-cookie-key
+chmod 0600 $POSIT_CONFIG_DIR/secure-cookie-key
+openssl genpkey -algorithm RSA -out $POSIT_CONFIG_DIR/launcher.pem -pkeyopt rsa_keygen_bits:2048
+openssl rsa -in $POSIT_CONFIG_DIR/launcher.pem -pubout > $POSIT_CONFIG_DIR/launcher.pub
+chmod 0600 $POSIT_CONFIG_DIR/launcher.pem
+
+aws s3 cp s3://$S3_BUCKET_NAME/etc-rstudio.tgz /tmp 
+
+tar xfz /tmp/etc-rstudio.tgz -C /opt/rstudio 
+
+chmod 0600 $POSIT_CONFIG_DIR/database.conf
+chmod 0600 $POSIT_CONFIG_DIR/audit-database.conf
+
+
 # Create a DNS alias to point hpclogin.pcluster.soleng.posit.it to the NLB created by AWS PC
 ## Figure out cluster name
 
@@ -266,54 +327,6 @@ aws route53 change-resource-record-sets \
 echo "ALB created: $ALB_DNS"
 echo "Workbench available at: https://workbench.pcluster.soleng.posit.it"
 
-mkdir -p /opt/rstudio/scripts
 
-aws s3 cp s3://$S3_BUCKET_NAME/alb-cron.sh /opt/rstudio/scripts 
-chmod +x  /opt/rstudio/scripts/alb-cron.sh
 
-# create systemd timer for cron job
-cat << EOF > /etc/systemd/system/sync-alb-targets.service
-# /etc/systemd/system/sync-alb-targets.service
-[Unit]
-Description=Sync ALB targets with NLB
 
-[Service]
-Type=oneshot
-ExecStart=/opt/rstudio/scripts/alb-cron.sh $CLUSTER_NAME pwb-login-nodes-tg
-EOF
-
-cat << EOF > /etc/systemd/system/sync-alb-targets.timer
-# /etc/systemd/system/sync-alb-targets.timer
-[Unit]
-Description=Run ALB sync every 5 minutes
-
-[Timer]
-OnBootSec=1min
-OnUnitActiveSec=5min
-
-[Install]
-WantedBy=timers.target
-EOF
-
-systemctl daemon-reload 
-systemctl enable --now sync-alb-targets.timer
-
-# Deal with Posit Workbench config files
-# We deploy them in /opt/rstudio/etc/rstudio here and then have the login nodes simply copy them from here 
-
-POSIT_CONFIG_DIR=/opt/rstudio/etc/rstudio
-
-mkdir -p $POSIT_CONFIG_DIR
-
-echo `uuidgen` > $POSIT_CONFIG_DIR/secure-cookie-key
-chmod 0600 $POSIT_CONFIG_DIR/secure-cookie-key
-openssl genpkey -algorithm RSA -out $POSIT_CONFIG_DIR/launcher.pem -pkeyopt rsa_keygen_bits:2048
-openssl rsa -in $POSIT_CONFIG_DIR/launcher.pem -pubout > $POSIT_CONFIG_DIR/launcher.pub
-chmod 0600 $POSIT_CONFIG_DIR/launcher.pem
-
-chmod 0600 $POSIT_CONFIG_DIR/database.conf
-chmod 0600 $POSIT_CONFIG_DIR/audit-database.conf
-
-aws s3 cp s3://$S3_BUCKET_NAME/etc-rstudio.tgz /tmp 
-
-tar xfz /tmp/etc-rstudio.tgz -C /opt/rstudio 

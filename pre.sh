@@ -138,7 +138,7 @@ for ins_script in scripts/etc-rstudio.tgz scripts/install-* scripts/alb-*; do aw
 
 #### IAM Policy for S3 access 
 # Check if IAM policy already exists
-S3_IAM_POLICY_ARN=$(aws iam list-policies \
+export S3_IAM_POLICY_ARN=$(aws iam list-policies \
     --query "Policies[?PolicyName=='aws-pc-pwb-s3-access-$USER'].Arn" \
     --output text)
 
@@ -219,7 +219,12 @@ if [ -z "$ELB_IAM_POLICY_ARN" ]; then
                                 "elasticloadbalancing:DescribeTargetGroups",
                                 "elasticloadbalancing:DescribeLoadBalancers",
                                 "elasticloadbalancing:DescribeTargetHealth",
-                                "elasticloadbalancing:RegisterTargets"
+                                "elasticloadbalancing:RegisterTargets",
+                                "elasticloadbalancing:CreateTargetGroup",
+                                "elasticloadbalancing:CreateLoadBalancer",
+                                "route53:ListHostedZonesByName",
+                                "route53:ChangeResourceRecordSets",
+                                "acm:ListCertificates"
                         ],
                         "Effect": "Allow",
                         "Resource": "*"
@@ -227,7 +232,10 @@ if [ -z "$ELB_IAM_POLICY_ARN" ]; then
                 {
                         "Action": [
                                 "ec2:DescribeNetworkInterfaces",
-                                "ec2:DescribeSubnets"
+                                "ec2:DescribeSubnets",
+                                "ec2:DescribeSecurityGroups",
+                                "ec2:CreateSecurityGroup",
+                                "ec2:DescribeVpcs"
                         ],
                         "Effect": "Allow",
                         "Resource": "*"
