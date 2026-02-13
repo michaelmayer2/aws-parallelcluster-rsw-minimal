@@ -5,6 +5,9 @@ PWB_VERSION=${1//+/-}
 
 S3_BUCKET_NAME=$2
 
+SUBNET_ID=$3
+SUBNET_ID2=$4
+
 # Install things needed for Singularity/Apptainer integration
 
 # create temporary directory for installs 
@@ -141,7 +144,7 @@ ACM_CERT_ARN=$(aws acm list-certificates \
     --output text)
 
 # Get subnets for the ALB (needs at least 2 AZs)
-ALB_SUBNETS="subnet-08a17fc2026b879b6 subnet-064565abe81486ef5"
+ALB_SUBNETS="$SUBNET_ID $SUBNET_ID2"
 
 # Create security group for ALB
 ALB_SG_ID=$(aws ec2 describe-security-groups \
@@ -158,11 +161,24 @@ if [ "$ALB_SG_ID" == "None" ] || [ -z "$ALB_SG_ID" ]; then
         --query 'GroupId' \
         --output text)
 
+    # Get the VPC ID 
+    SUBNET_ID=$(cat /opt/parallelcluster/shared/cluster-config.yaml | yq '.HeadNode.Networking.SubnetId')
+    POSIT_VPC=$(aws ec2 describe-subnets \
+    --subnet-ids $SUBNET_ID \
+    --query 'Subnets[0].VpcId' \
+    --output text)
+
+    # Get CIDR Range 
+    CIDR_RANGE=$(aws ec2 describe-vpcs \
+        --vpc-ids $POSIT_VPC \
+        --query 'Vpcs[0].CidrBlock' \
+        --output text)
+
     aws ec2 authorize-security-group-ingress \
         --group-id "${ALB_SG_ID}" \
         --protocol tcp \
         --port 443 \
-        --cidr "0.0.0.0/0"
+        --cidr "${CIDR_RANGE}"
 fi
 
 # Create target group with 302 as healthy response
@@ -199,6 +215,11 @@ ALB_ARN=$(aws elbv2 create-load-balancer \
 # Wait for ALB to be active
 aws elbv2 wait load-balancer-available --load-balancer-arns $ALB_ARN
 
+# Modify ALB attributes for increased security
+aws elbv2 modify-load-balancer-attributes \
+  --load-balancer-arn $ALB_ARN \
+  --attributes Key=routing.http.drop_invalid_header_fields.enabled,Value=true
+
 # Get ALB DNS name and hosted zone ID
 ALB_DNS=$(aws elbv2 describe-load-balancers \
     --load-balancer-arns $ALB_ARN \
@@ -211,12 +232,18 @@ ALB_HOSTED_ZONE_ID=$(aws elbv2 describe-load-balancers \
     --output text)
 
 # Create HTTPS listener
-aws elbv2 create-listener \
+LISTENER_ARN=$(aws elbv2 create-listener \
     --load-balancer-arn $ALB_ARN \
     --protocol HTTPS \
     --port 443 \
     --certificates CertificateArn=$ACM_CERT_ARN \
-    --default-actions Type=forward,TargetGroupArn=$TG_ARN
+    --default-actions Type=forward,TargetGroupArn=$TG_ARN \
+    --query 'Listeners[0].ListenerArn' \
+    --output text)
+
+aws elbv2 modify-listener \
+  --listener-arn $LISTENER_ARN \
+  --ssl-policy ELBSecurityPolicy-TLS13-1-2-Res-PQ-2025-09
 
 # Create Route53 alias for workbench.pcluster.soleng.posit.it
 aws route53 change-resource-record-sets \

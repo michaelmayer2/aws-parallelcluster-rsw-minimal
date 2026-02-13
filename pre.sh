@@ -11,6 +11,11 @@ export POSIT_TAGS_EC2="ResourceType=security-group,Tags=[{Key=rs:project,Value=s
 
 export POSIT_TAGS_S3='{"TagSet":[{"Key":"rs:project","Value":"solutions"},{"Key":"rs:environment","Value":"development"},{"Key":"rs:owner","Value":"michael.mayer@posit.co"}]}'
 
+# Extract CIDR Range
+export CIDR_RANGE=$(aws ec2 describe-vpcs \
+    --vpc-ids $POSIT_VPC \
+    --query 'Vpcs[0].CidrBlock' \
+    --output text)
 
 # Check if security group already exists
 export PWB_LOGIN_SG_ID=$(aws ec2 describe-security-groups \
@@ -30,12 +35,12 @@ if [ "$PWB_LOGIN_SG_ID" == "None" ] || [ -z "$PWB_LOGIN_SG_ID" ]; then
         --group-id "${PWB_LOGIN_SG_ID}" \
         --protocol tcp \
         --port 8787 \
-        --cidr "10.13.0.0/16"
+        --cidr "${CIDR_RANGE}"
     aws ec2 authorize-security-group-ingress \
         --group-id "${PWB_LOGIN_SG_ID}" \
         --protocol tcp \
         --port 5559 \
-        --cidr "10.13.0.0/16"
+        --cidr "${CIDR_RANGE}"
 else
     echo "Security group aws-pc-pwb-db-access already exists: $PWB_LOGIN_SG_ID"
 fi
@@ -57,7 +62,7 @@ if [ "$PWB_DB_SG_ID" == "None" ] || [ -z "$PWB_DB_SG_ID" ]; then
         --group-id "${PWB_DB_SG_ID}" \
         --protocol tcp \
         --port 5432 \
-        --cidr "10.13.0.0/16"
+        --cidr "${CIDR_RANGE}"
 else
     echo "Security group aws-pc-pwb-db-access already exists: $PWB_DB_SG_ID"
 fi

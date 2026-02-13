@@ -20,6 +20,8 @@ HeadNode:
       Args:
         - "${PWB_VERSION}"
         - "${S3_BUCKET_NAME}"
+        - "${POSIT_SUBNET_ID}"
+        - "${POSIT_SUBNET_ID2}"
 Image:
   Os: rocky9
   CustomAmi: ${AWS_PC_AMI}
@@ -112,6 +114,8 @@ LoginNodes:
           Script: s3://aws-pc-scripts-${USER}/install-login-node.sh
           Args:
             - "${PWB_VERSION}"
+      Ssh: 
+        AllowedIps: "${CIDR_RANGE}"
 
 DevSettings:
   Timeouts:
