@@ -17,6 +17,7 @@ The above image shows the Architecture used. More detailed information can be fo
 Create a .env file in the repository folder that contains
 
 ```
+CLUSTER_NAME=""
 POSIT_VPC=""
 POSIT_SUBNET_ID=""
 POSIT_SUBNET_ID2=""
@@ -28,6 +29,7 @@ PWB_DB_PASSWORD=""
 
 where
 
+* `CLUSTER_NAME` is the name of the AWS ParallelCluster deploment
 * `POSIT_VPC`, `POSIT_SUBNET` and `POSIT_SUBNET2` are the id's of a VPC and two subnets that exist in the VPC. The subnets will be used to set up the load balancers 
 * `PWB_VERSION` is the desired version of Posit Workbench you would like to use
 * `PWB_DB_USER` and `PWB_UB_PASSWORD` are the desired username and passqord for the PostgreSQL database (will be created as part of the setup)
@@ -62,10 +64,8 @@ envsubst < yaml/cluster-config.yaml > cluster-config-final.yaml
 to create a parallelcluster cluster config file using the environment variables set by `pre.sh` and then run 
 
 ```
-pcluster create-cluster -n $AWS_PC_IMAGE -c cluster-config-final.yaml  --rollback-on-failure false
-```
-
-where we assume that the name of the cluster will be the same as the name of the corresponding AMI. 
+pcluster create-cluster -n $CLUSTER_NAME -c cluster-config-final.yaml  --rollback-on-failure false
+``` 
 
 ### Post installation steps
 
