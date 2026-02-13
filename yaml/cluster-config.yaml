@@ -68,7 +68,7 @@ Scheduling:
           - BucketName: ${S3_BUCKET_NAME}
       CustomActions:
         OnNodeConfigured:
-          Script: s3://${S3_BUCKET_NAME}/install-compute.sh
+          Script: s3://${S3_BUCKET_NAME}/install-compute-node.sh
       Networking:
         PlacementGroup:
           Enabled: FALSE
@@ -88,7 +88,7 @@ Scheduling:
           - BucketName: ${S3_BUCKET_NAME}
       CustomActions:
         OnNodeConfigured:
-          Script: s3://${S3_BUCKET_NAME}/install-compute.sh
+          Script: s3://${S3_BUCKET_NAME}/install-compute-node.sh
       Networking:
         PlacementGroup:
           Enabled: FALSE

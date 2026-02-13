@@ -115,8 +115,8 @@ export PWB_DB_HOST=`aws rds describe-db-instances \
     --query 'DBInstances[0].Endpoint.Address' \
     --output text`
 
-envsubst < etc/rstudio/database.conf.tmpl > etc/rstudio/database.conf
-envsubst < etc/rstudio/audit-database.conf.tmpl > etc/rstudio/audit-database.conf
+envsubst < scripts/etc/rstudio/database.conf.tmpl > scripts/etc/rstudio/database.conf
+envsubst < scripts/etc/rstudio/audit-database.conf.tmpl > scripts/etc/rstudio/audit-database.conf
 
 # Tar up the etc/rstudio.files 
 
