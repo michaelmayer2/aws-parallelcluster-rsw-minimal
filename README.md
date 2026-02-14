@@ -76,3 +76,5 @@ In addition, an EFS backup policy will be created and activated for the EFS file
 # Clean-up
 
 After you tear down the cluster, you can use `delete.sh` to remove the auxiliary infrastructure such as IAM roles, security groups etc... 
+
+Note that when you tear down the cluster, the AWS resources created by the `install-head-node.sh` script will be automatically removed. 
