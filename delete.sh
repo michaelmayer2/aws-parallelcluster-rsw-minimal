@@ -65,31 +65,39 @@ aws s3 rm s3://aws-pc-scripts-$USER --recursive 2>/dev/null
 aws s3 rb s3://aws-pc-scripts-$USER 2>/dev/null
 
 
-#### Delete IAM policies
-echo "Deleting IAM policy aws-pc-pwb-s3-access-$USER..."
-S3_IAM_POLICY_ARN=$(aws iam list-policies \
-    --query "Policies[?PolicyName=='aws-pc-pwb-s3-access-$USER'].Arn" \
-    --output text)
-if [ -n "$S3_IAM_POLICY_ARN" ]; then
-    aws iam delete-policy --policy-arn "$S3_IAM_POLICY_ARN"
-fi
+# ...existing code...
+#### IAM Policies
+for POLICY_NAME in "aws-pc-pwb-s3-access-$USER" "aws-pc-pwb-ec2-runinstances-$USER" "aws-pc-pwb-elb-$USER"; do
+    POLICY_ARN=$(aws iam list-policies \
+        --query "Policies[?PolicyName=='${POLICY_NAME}'].Arn" \
+        --output text 2>/dev/null)
+    
+    if [ -n "$POLICY_ARN" ] && [ "$POLICY_ARN" != "None" ]; then
+        echo "Deleting IAM policy ${POLICY_NAME}..."
+        
+        # Delete all non-default policy versions first
+        for VERSION_ID in $(aws iam list-policy-versions \
+            --policy-arn $POLICY_ARN \
+            --query "Versions[?IsDefaultVersion==\`false\`].VersionId" \
+            --output text 2>/dev/null); do
+            aws iam delete-policy-version \
+                --policy-arn $POLICY_ARN \
+                --version-id $VERSION_ID 2>/dev/null
+        done
+        
+        # Detach policy from all roles
+        for ROLE_NAME in $(aws iam list-entities-for-policy \
+            --policy-arn $POLICY_ARN \
+            --query "PolicyRoles[*].RoleName" \
+            --output text 2>/dev/null); do
+            aws iam detach-role-policy \
+                --role-name $ROLE_NAME \
+                --policy-arn $POLICY_ARN 2>/dev/null
+        done
 
-echo "Deleting IAM policy aws-pc-pwb-ec2-runinstances-$USER..."
-EC2_RUNINSTANCES_IAM_POLICY_ARN=$(aws iam list-policies \
-    --query "Policies[?PolicyName=='aws-pc-pwb-ec2-runinstances-$USER'].Arn" \
-    --output text)
-if [ -n "$EC2_RUNINSTANCES_IAM_POLICY_ARN" ]; then
-    aws iam delete-policy --policy-arn "$EC2_RUNINSTANCES_IAM_POLICY_ARN"
-fi
-
-echo "Deleting IAM policy aws-pc-pwb-elb-$USER..."
-ELB_IAM_POLICY_ARN=$(aws iam list-policies \
-    --query "Policies[?PolicyName=='aws-pc-pwb-elb-$USER'].Arn" \
-    --output text)
-if [ -n "$ELB_IAM_POLICY_ARN" ]; then
-    aws iam delete-policy --policy-arn "$ELB_IAM_POLICY_ARN"
-fi
-
+        aws iam delete-policy --policy-arn $POLICY_ARN 2>/dev/null
+    fi
+done
 
 echo "========================================"
 echo "  All resources deleted successfully"

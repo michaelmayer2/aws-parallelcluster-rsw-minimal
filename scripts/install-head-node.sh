@@ -80,6 +80,85 @@ exec > >(tee -a /var/log/head-node.log) 2>&1
 
 set -x 
 
+# Save cleanup function and variables to a shutdown script
+save_cleanup_script() {
+    cat << CLEANUP_EOF > /opt/rstudio/scripts/cleanup.sh
+#!/bin/bash
+exec >> /var/log/head-node-cleanup.log 2>&1
+echo "Running cleanup at \$(date)..."
+
+HOSTED_ZONE_ID="$HOSTED_ZONE_ID"
+ALB_DNS="$ALB_DNS"
+ALB_HOSTED_ZONE_ID="$ALB_HOSTED_ZONE_ID"
+NLB_DNS="$NLB_DNS"
+NLB_HOSTED_ZONE_ID="$NLB_HOSTED_ZONE_ID"
+LISTENER_ARN="$LISTENER_ARN"
+ALB_ARN="$ALB_ARN"
+TG_ARN="$TG_ARN"
+ALB_SG_ID="$ALB_SG_ID"
+
+# Remove Route53 records
+if [ -n "\$ALB_DNS" ] && [ -n "\$ALB_HOSTED_ZONE_ID" ]; then
+    aws route53 change-resource-record-sets \
+        --hosted-zone-id \$HOSTED_ZONE_ID \
+        --change-batch '{
+            "Changes": [{
+                "Action": "DELETE",
+                "ResourceRecordSet": {
+                    "Name": "workbench.pcluster.soleng.posit.it",
+                    "Type": "A",
+                    "AliasTarget": {
+                        "HostedZoneId": "'"\$ALB_HOSTED_ZONE_ID"'",
+                        "DNSName": "'"\$ALB_DNS"'",
+                        "EvaluateTargetHealth": true
+                    }
+                }
+            }]
+        }' 2>/dev/null
+fi
+
+if [ -n "\$NLB_DNS" ] && [ -n "\$NLB_HOSTED_ZONE_ID" ]; then
+    aws route53 change-resource-record-sets \
+        --hosted-zone-id \$HOSTED_ZONE_ID \
+        --change-batch '{
+            "Changes": [{
+                "Action": "DELETE",
+                "ResourceRecordSet": {
+                    "Name": "hpclogin.pcluster.soleng.posit.it",
+                    "Type": "A",
+                    "AliasTarget": {
+                        "HostedZoneId": "'"\$NLB_HOSTED_ZONE_ID"'",
+                        "DNSName": "'"\$NLB_DNS"'",
+                        "EvaluateTargetHealth": true
+                    }
+                }
+            }]
+        }' 2>/dev/null
+fi
+
+# Delete HTTPS listener
+[ -n "\$LISTENER_ARN" ] && aws elbv2 delete-listener --listener-arn \$LISTENER_ARN 2>/dev/null
+
+# Delete ALB
+if [ -n "\$ALB_ARN" ]; then
+    aws elbv2 delete-load-balancer --load-balancer-arn \$ALB_ARN 2>/dev/null
+    aws elbv2 wait load-balancers-deleted --load-balancer-arns \$ALB_ARN 2>/dev/null
+fi
+
+# Delete target group
+[ -n "\$TG_ARN" ] && aws elbv2 delete-target-group --target-group-arn \$TG_ARN 2>/dev/null
+
+# Delete ALB security group
+[ -n "\$ALB_SG_ID" ] && [ "\$ALB_SG_ID" != "None" ] && aws ec2 delete-security-group --group-id \$ALB_SG_ID 2>/dev/null
+
+# Disable systemd timer
+systemctl disable --now sync-alb-targets.timer 2>/dev/null
+
+echo "Cleanup complete at \$(date)"
+CLEANUP_EOF
+    chmod +x /opt/rstudio/scripts/cleanup.sh
+}
+
 # Deploy config files
 
 mkdir -p /opt/rstudio/scripts
@@ -207,9 +286,15 @@ ACM_CERT_ARN=$(aws acm list-certificates \
 # Get subnets for the ALB (needs at least 2 AZs)
 ALB_SUBNETS="$SUBNET_ID $SUBNET_ID2"
 
+# VPC ID
+VPC_ID=$(aws ec2 describe-subnets \
+    --subnet-ids $SUBNET_ID \
+    --query 'Subnets[0].VpcId' \
+    --output text)
+
 # Create security group for ALB
 ALB_SG_ID=$(aws ec2 describe-security-groups \
-    --filters "Name=group-name,Values=pwb-alb-sg" "Name=vpc-id,Values=${POSIT_VPC}" \
+    --filters "Name=group-name,Values=pwb-alb-sg" "Name=vpc-id,Values=${VPC_ID}" \
     --query 'SecurityGroups[0].GroupId' \
     --output text)
 
@@ -218,20 +303,13 @@ if [ "$ALB_SG_ID" == "None" ] || [ -z "$ALB_SG_ID" ]; then
     ALB_SG_ID=$(aws ec2 create-security-group \
         --group-name pwb-alb-sg \
         --description "SG for PWB ALB" \
-        --vpc-id "${POSIT_VPC}" \
+        --vpc-id "${VPC_ID}" \
         --query 'GroupId' \
         --output text)
 
-    # Get the VPC ID 
-    SUBNET_ID=$(cat /opt/parallelcluster/shared/cluster-config.yaml | yq '.HeadNode.Networking.SubnetId')
-    POSIT_VPC=$(aws ec2 describe-subnets \
-    --subnet-ids $SUBNET_ID \
-    --query 'Subnets[0].VpcId' \
-    --output text)
-
     # Get CIDR Range 
     CIDR_RANGE=$(aws ec2 describe-vpcs \
-        --vpc-ids $POSIT_VPC \
+        --vpc-ids $VPC_ID \
         --query 'Vpcs[0].CidrBlock' \
         --output text)
 
@@ -247,7 +325,7 @@ TG_ARN=$(aws elbv2 create-target-group \
     --name pwb-login-nodes-tg \
     --protocol HTTP \
     --port 8787 \
-    --vpc-id "${POSIT_VPC}" \
+    --vpc-id "${VPC_ID}" \
     --health-check-protocol HTTP \
     --health-check-port 8787 \
     --health-check-path "/" \
@@ -327,6 +405,31 @@ aws route53 change-resource-record-sets \
 echo "ALB created: $ALB_DNS"
 echo "Workbench available at: https://workbench.pcluster.soleng.posit.it"
 
+# Save cleanup script with all variable values baked in
+save_cleanup_script
 
+# Create systemd service to run cleanup on shutdown
+cat << EOF > /etc/systemd/system/head-node-cleanup.service
+[Unit]
+Description=Clean up AWS resources on head node shutdown
+DefaultDependencies=no
+Before=shutdown.target reboot.target halt.target
 
+[Service]
+Type=oneshot
+ExecStart=/opt/rstudio/scripts/cleanup.sh
+TimeoutStartSec=120
 
+[Install]
+WantedBy=halt.target reboot.target shutdown.target
+EOF
+
+systemctl daemon-reload
+systemctl enable head-node-cleanup.service
+
+# Create PWB Audit DB
+yum install -y postgresql
+
+source $POSIT_CONFIG_DIR/database.conf
+
+PGPASSWORD=$password psql -h $host -U $username pwb -c "CREATE DATABASE pwbaudit;" 

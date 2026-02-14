@@ -222,6 +222,9 @@ if [ -z "$ELB_IAM_POLICY_ARN" ]; then
                                 "elasticloadbalancing:RegisterTargets",
                                 "elasticloadbalancing:CreateTargetGroup",
                                 "elasticloadbalancing:CreateLoadBalancer",
+                                "elasticloadbalancing:CreateListener",
+                                "elasticloadbalancing:ModifyListener",
+                                "elasticloadbalancing:ModifyLoadBalancerAttributes",  
                                 "route53:ListHostedZonesByName",
                                 "route53:ChangeResourceRecordSets",
                                 "acm:ListCertificates"
