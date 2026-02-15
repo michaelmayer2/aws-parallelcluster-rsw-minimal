@@ -102,6 +102,7 @@ if [ "$DB_INSTANCE_EXISTS" == "None" ] || [ -z "$DB_INSTANCE_EXISTS" ]; then
     --master-user-password $PWB_DB_PASSWORD \
     --allocated-storage 20 \
     --storage-encrypted \
+    --multi-az \
     --vpc-security-group-ids $PWB_DB_SG_ID \
     --tags "${POSIT_TAGS_JSON}"
 
