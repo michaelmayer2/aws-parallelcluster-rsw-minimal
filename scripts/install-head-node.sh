@@ -1,5 +1,10 @@
 #!/bin/bash
 
+# Redirect all output to log file
+exec >> /var/log/head-node.log 2>&1
+
+set -x 
+
 # Posit Workbench Version 
 PWB_VERSION=${1//+/-}
 
@@ -12,22 +17,6 @@ SUBNET_ID2=$4
 
 # create temporary directory for installs 
 tempdir=$(mktemp -d)
-
-# make RHEL Image compatible with RockyLinux 
-# pushd $tempdir 
-#     rpm -e --nodeps redhat-release 
-#     rm -rf /usr/share/redhat-release
-#     yum install -y curl 
-#     rocky_dir="https://dl.rockylinux.org/vault/rocky/9.6/BaseOS/x86_64/os/Packages/r/"
-#     for i in rocky-release-9.6-1.3.el9.noarch.rpm \
-#         rocky-repos-9.6-1.3.el9.noarch.rpm \
-#         rocky-gpg-keys-9.6-1.3.el9.noarch.rpm; do \
-#         curl -LO $rocky_dir/$i; \
-#     done 
-#     rpm -Uhv rocky-* --force 
-#     rm -rf rocky* 
-#     rpm -e libdnf-plugin-subscription-manager python3-subscription-manager-rhsm subscription-manager rhc insights-client redhat-cloud-client-configuration
-# popd
 
 # Install Apptainer
 # (strictly only needed because we are building containers here)
@@ -54,31 +43,6 @@ pushd $tempdir/singularity-rstudio/slurm-singularity-exec/ && \
 EOF
 popd 
 
-# Install a couple of singularity/apptainer containers
-
-mkdir -p /opt/rstudio/container
-pushd $tempdir/singularity-rstudio/data/r-session-complete
-    export SLURM_VERSION=`/opt/slurm/bin/sinfo -V | cut -d " " -f 2`
-    yum install -y gettext
-    envsubst < build.env > build.env.final
-    for os in noble; do
-        pushd $os
-        singularity build --build-arg-file ../build.env.final /opt/rstudio/container/$os.sif r-session-complete.sdef & 
-        popd
-    done
-    wait 
-
-popd
-
-# cleanup tempdir
-rm -rf $tempdir
-
-
-
-# Redirect all output to log file
-exec > >(tee -a /var/log/head-node.log) 2>&1
-
-set -x 
 
 # Save cleanup function and variables to a shutdown script
 save_cleanup_script() {
@@ -200,11 +164,19 @@ POSIT_CONFIG_DIR=/opt/rstudio/etc/rstudio
 
 mkdir -p $POSIT_CONFIG_DIR
 
+echo "Creating secure-cookie-key"
 echo `uuidgen` > $POSIT_CONFIG_DIR/secure-cookie-key
 chmod 0600 $POSIT_CONFIG_DIR/secure-cookie-key
+
+echo "Create launcher keys"
 openssl genpkey -algorithm RSA -out $POSIT_CONFIG_DIR/launcher.pem -pkeyopt rsa_keygen_bits:2048
 openssl rsa -in $POSIT_CONFIG_DIR/launcher.pem -pubout > $POSIT_CONFIG_DIR/launcher.pub
 chmod 0600 $POSIT_CONFIG_DIR/launcher.pem
+
+echo "Create audited jobs keys"
+openssl genpkey -algorithm RSA -out $POSIT_CONFIG_DIR/audited-jobs-private-key.pem
+openssl rsa -pubout -in $POSIT_CONFIG_DIR/audited-jobs-private-key.pem -out $POSIT_CONFIG_DIR/audited-jobs-public-key.pem
+chmod 0600 $POSIT_CONFIG_DIR/audited-jobs-private-key.pem
 
 aws s3 cp s3://$S3_BUCKET_NAME/etc-rstudio.tgz /tmp 
 
@@ -332,7 +304,7 @@ TG_ARN=$(aws elbv2 create-target-group \
     --matcher "HttpCode=302" \
     --target-type instance \
     --query 'TargetGroups[0].TargetGroupArn' \
-    --output text)
+    --output text  | tr -d '\n\r')
 
 # Register EC2 instances to target group
 for EC2_ID in $EC2_IDS; do
@@ -433,3 +405,25 @@ yum install -y postgresql
 source $POSIT_CONFIG_DIR/database.conf
 
 PGPASSWORD=$password psql -h $host -U $username pwb -c "CREATE DATABASE pwbaudit;" 
+
+touch /opt/rstudio/.db
+
+# Install a couple of singularity/apptainer containers
+
+mkdir -p /opt/rstudio/container
+
+mkdir -p /opt/rstudio/container
+pushd $tempdir/singularity-rstudio/data/r-session-complete
+    export SLURM_VERSION=`/opt/slurm/bin/sinfo -V | cut -d " " -f 2`
+    yum install -y gettext
+    envsubst < build.env > build.env.final
+    for os in noble; do
+        cd $os
+        singularity build --build-arg-file ../build.env.final /opt/rstudio/container/$os.sif r-session-complete.sdef &
+        cd ..
+    done
+    wait
+popd
+
+# cleanup tempdir
+rm -rf $tempdir

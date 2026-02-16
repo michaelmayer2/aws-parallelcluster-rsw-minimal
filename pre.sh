@@ -226,6 +226,9 @@ if [ -z "$ELB_IAM_POLICY_ARN" ]; then
                                 "elasticloadbalancing:CreateListener",
                                 "elasticloadbalancing:ModifyListener",
                                 "elasticloadbalancing:ModifyLoadBalancerAttributes",  
+                                "elasticloadbalancing:DeleteListener",
+                                "elasticloadbalancing:DeleteLoadBalancer",
+                                "elasticloadbalancing:DeleteTargetGroup",
                                 "route53:ListHostedZonesByName",
                                 "route53:ChangeResourceRecordSets",
                                 "acm:ListCertificates"
@@ -239,7 +242,8 @@ if [ -z "$ELB_IAM_POLICY_ARN" ]; then
                                 "ec2:DescribeSubnets",
                                 "ec2:DescribeSecurityGroups",
                                 "ec2:CreateSecurityGroup",
-                                "ec2:DescribeVpcs"
+                                "ec2:DescribeVpcs",
+                                "ec2:DeleteSecurityGroup"
                         ],
                         "Effect": "Allow",
                         "Resource": "*"
