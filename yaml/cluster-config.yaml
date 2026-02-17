@@ -14,12 +14,16 @@ HeadNode:
     AdditionalIamPolicies:
       - Policy: ${EC2_RUNINSTANCES_IAM_POLICY_ARN}
       - Policy: ${ELB_IAM_POLICY_ARN}
+  Ssh: 
+    AllowedIps: "${CIDR_RANGE}"
   CustomActions:
     OnNodeConfigured:
       Script: s3://${S3_BUCKET_NAME}/install-head-node.sh
       Args:
         - "${PWB_VERSION}"
         - "${S3_BUCKET_NAME}"
+        - "${POSIT_SUBNET_ID}"
+        - "${POSIT_SUBNET_ID2}"
 Image:
   Os: rocky9
   CustomAmi: ${AWS_PC_AMI}
@@ -66,7 +70,7 @@ Scheduling:
           - BucketName: ${S3_BUCKET_NAME}
       CustomActions:
         OnNodeConfigured:
-          Script: s3://${S3_BUCKET_NAME}/install-compute.sh
+          Script: s3://${S3_BUCKET_NAME}/install-compute-node.sh
       Networking:
         PlacementGroup:
           Enabled: FALSE
@@ -86,7 +90,7 @@ Scheduling:
           - BucketName: ${S3_BUCKET_NAME}
       CustomActions:
         OnNodeConfigured:
-          Script: s3://${S3_BUCKET_NAME}/install-compute.sh
+          Script: s3://${S3_BUCKET_NAME}/install-compute-node.sh
       Networking:
         PlacementGroup:
           Enabled: FALSE
@@ -112,6 +116,8 @@ LoginNodes:
           Script: s3://aws-pc-scripts-${USER}/install-login-node.sh
           Args:
             - "${PWB_VERSION}"
+      Ssh: 
+        AllowedIps: "${CIDR_RANGE}"
 
 DevSettings:
   Timeouts:

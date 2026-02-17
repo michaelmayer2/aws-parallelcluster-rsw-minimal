@@ -11,6 +11,11 @@ export POSIT_TAGS_EC2="ResourceType=security-group,Tags=[{Key=rs:project,Value=s
 
 export POSIT_TAGS_S3='{"TagSet":[{"Key":"rs:project","Value":"solutions"},{"Key":"rs:environment","Value":"development"},{"Key":"rs:owner","Value":"michael.mayer@posit.co"}]}'
 
+# Extract CIDR Range
+export CIDR_RANGE=$(aws ec2 describe-vpcs \
+    --vpc-ids $POSIT_VPC \
+    --query 'Vpcs[0].CidrBlock' \
+    --output text)
 
 # Check if security group already exists
 export PWB_LOGIN_SG_ID=$(aws ec2 describe-security-groups \
@@ -30,12 +35,12 @@ if [ "$PWB_LOGIN_SG_ID" == "None" ] || [ -z "$PWB_LOGIN_SG_ID" ]; then
         --group-id "${PWB_LOGIN_SG_ID}" \
         --protocol tcp \
         --port 8787 \
-        --cidr "10.13.0.0/16"
+        --cidr "${CIDR_RANGE}"
     aws ec2 authorize-security-group-ingress \
         --group-id "${PWB_LOGIN_SG_ID}" \
         --protocol tcp \
         --port 5559 \
-        --cidr "10.13.0.0/16"
+        --cidr "${CIDR_RANGE}"
 else
     echo "Security group aws-pc-pwb-db-access already exists: $PWB_LOGIN_SG_ID"
 fi
@@ -57,7 +62,7 @@ if [ "$PWB_DB_SG_ID" == "None" ] || [ -z "$PWB_DB_SG_ID" ]; then
         --group-id "${PWB_DB_SG_ID}" \
         --protocol tcp \
         --port 5432 \
-        --cidr "10.13.0.0/16"
+        --cidr "${CIDR_RANGE}"
 else
     echo "Security group aws-pc-pwb-db-access already exists: $PWB_DB_SG_ID"
 fi
@@ -97,6 +102,7 @@ if [ "$DB_INSTANCE_EXISTS" == "None" ] || [ -z "$DB_INSTANCE_EXISTS" ]; then
     --master-user-password $PWB_DB_PASSWORD \
     --allocated-storage 20 \
     --storage-encrypted \
+    --multi-az \
     --vpc-security-group-ids $PWB_DB_SG_ID \
     --tags "${POSIT_TAGS_JSON}"
 
@@ -110,8 +116,8 @@ export PWB_DB_HOST=`aws rds describe-db-instances \
     --query 'DBInstances[0].Endpoint.Address' \
     --output text`
 
-envsubst < etc/rstudio/database.conf.tmpl > etc/rstudio/database.conf
-envsubst < etc/rstudio/audit-database.conf.tmpl > etc/rstudio/audit-database.conf
+envsubst < scripts/etc/rstudio/database.conf.tmpl > scripts/etc/rstudio/database.conf
+envsubst < scripts/etc/rstudio/audit-database.conf.tmpl > scripts/etc/rstudio/audit-database.conf
 
 # Tar up the etc/rstudio.files 
 
@@ -133,7 +139,7 @@ for ins_script in scripts/etc-rstudio.tgz scripts/install-* scripts/alb-*; do aw
 
 #### IAM Policy for S3 access 
 # Check if IAM policy already exists
-S3_IAM_POLICY_ARN=$(aws iam list-policies \
+export S3_IAM_POLICY_ARN=$(aws iam list-policies \
     --query "Policies[?PolicyName=='aws-pc-pwb-s3-access-$USER'].Arn" \
     --output text)
 
@@ -214,7 +220,18 @@ if [ -z "$ELB_IAM_POLICY_ARN" ]; then
                                 "elasticloadbalancing:DescribeTargetGroups",
                                 "elasticloadbalancing:DescribeLoadBalancers",
                                 "elasticloadbalancing:DescribeTargetHealth",
-                                "elasticloadbalancing:RegisterTargets"
+                                "elasticloadbalancing:RegisterTargets",
+                                "elasticloadbalancing:CreateTargetGroup",
+                                "elasticloadbalancing:CreateLoadBalancer",
+                                "elasticloadbalancing:CreateListener",
+                                "elasticloadbalancing:ModifyListener",
+                                "elasticloadbalancing:ModifyLoadBalancerAttributes",  
+                                "elasticloadbalancing:DeleteListener",
+                                "elasticloadbalancing:DeleteLoadBalancer",
+                                "elasticloadbalancing:DeleteTargetGroup",
+                                "route53:ListHostedZonesByName",
+                                "route53:ChangeResourceRecordSets",
+                                "acm:ListCertificates"
                         ],
                         "Effect": "Allow",
                         "Resource": "*"
@@ -222,7 +239,11 @@ if [ -z "$ELB_IAM_POLICY_ARN" ]; then
                 {
                         "Action": [
                                 "ec2:DescribeNetworkInterfaces",
-                                "ec2:DescribeSubnets"
+                                "ec2:DescribeSubnets",
+                                "ec2:DescribeSecurityGroups",
+                                "ec2:CreateSecurityGroup",
+                                "ec2:DescribeVpcs",
+                                "ec2:DeleteSecurityGroup"
                         ],
                         "Effect": "Allow",
                         "Resource": "*"

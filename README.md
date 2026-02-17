@@ -17,21 +17,23 @@ The above image shows the Architecture used. More detailed information can be fo
 Create a .env file in the repository folder that contains
 
 ```
+CLUSTER_NAME=""
 POSIT_VPC=""
 POSIT_SUBNET_ID=""
 POSIT_SUBNET_ID2=""
 PWB_VERSION="2026.01.0+392.pro5"
-AWS_PC_IMAGE=""
+AWS_PC_AMI=""
 PWB_DB_USER=""
 PWB_DB_PASSWORD=""
 ```
 
 where
 
+* `CLUSTER_NAME` is the name of the AWS ParallelCluster deploment
 * `POSIT_VPC`, `POSIT_SUBNET` and `POSIT_SUBNET2` are the id's of a VPC and two subnets that exist in the VPC. The subnets will be used to set up the load balancers 
 * `PWB_VERSION` is the desired version of Posit Workbench you would like to use
 * `PWB_DB_USER` and `PWB_UB_PASSWORD` are the desired username and passqord for the PostgreSQL database (will be created as part of the setup)
-* `AWS_PC_IMAGE` is the name of the AWS ParallelCluster AMI you would like to use
+* `AWS_PC_AMI` is the ID of the AWS ParallelCluster AMI you would like to use
 
 ### Starting the pre-installation steps 
 
@@ -62,11 +64,17 @@ envsubst < yaml/cluster-config.yaml > cluster-config-final.yaml
 to create a parallelcluster cluster config file using the environment variables set by `pre.sh` and then run 
 
 ```
-pcluster create-cluster -n $AWS_PC_IMAGE -c cluster-config-final.yaml  --rollback-on-failure false
-```
-
-where we assume that the name of the cluster will be the same as the name of the corresponding AMI. 
+pcluster create-cluster -n $CLUSTER_NAME -c cluster-config-final.yaml  --rollback-on-failure false
+``` 
 
 ### Post installation steps
 
 Once the parallecluster env has been built successfully, you can run [post.sh](post.sh) in order to create a DNS alias `hpclogin.pcluster.soleng.posit.it` that will forward to the NLB of AWS Parallelcluster. This URL is available for SSH access. Given the fact this is an NLB, an ssh connection to this URL will be automatically distributed on one of the login nodes. 
+
+In addition, an EFS backup policy will be created and activated for the EFS file systems used by AWS ParallelCluster in order to satisfy some local security regulations.
+
+# Clean-up
+
+After you tear down the cluster, you can use `delete.sh` to remove the auxiliary infrastructure such as IAM roles, security groups etc... 
+
+Note that when you tear down the cluster, the AWS resources created by the `install-head-node.sh` script will be automatically removed. 

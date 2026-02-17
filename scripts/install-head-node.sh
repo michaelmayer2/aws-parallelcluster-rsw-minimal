@@ -1,30 +1,22 @@
 #!/bin/bash
 
+# Redirect all output to log file
+exec >> /var/log/head-node.log 2>&1
+
+set -x 
+
 # Posit Workbench Version 
 PWB_VERSION=${1//+/-}
 
 S3_BUCKET_NAME=$2
 
+SUBNET_ID=$3
+SUBNET_ID2=$4
+
 # Install things needed for Singularity/Apptainer integration
 
 # create temporary directory for installs 
 tempdir=$(mktemp -d)
-
-# make RHEL Image compatible with RockyLinux 
-# pushd $tempdir 
-#     rpm -e --nodeps redhat-release 
-#     rm -rf /usr/share/redhat-release
-#     yum install -y curl 
-#     rocky_dir="https://dl.rockylinux.org/vault/rocky/9.6/BaseOS/x86_64/os/Packages/r/"
-#     for i in rocky-release-9.6-1.3.el9.noarch.rpm \
-#         rocky-repos-9.6-1.3.el9.noarch.rpm \
-#         rocky-gpg-keys-9.6-1.3.el9.noarch.rpm; do \
-#         curl -LO $rocky_dir/$i; \
-#     done 
-#     rpm -Uhv rocky-* --force 
-#     rm -rf rocky* 
-#     rpm -e libdnf-plugin-subscription-manager python3-subscription-manager-rhsm subscription-manager rhc insights-client redhat-cloud-client-configuration
-# popd
 
 # Install Apptainer
 # (strictly only needed because we are building containers here)
@@ -51,25 +43,156 @@ pushd $tempdir/singularity-rstudio/slurm-singularity-exec/ && \
 EOF
 popd 
 
-# Install a couple of singularity/apptainer containers
 
-mkdir -p /opt/rstudio/container
-pushd $tempdir/singularity-rstudio/data/r-session-complete
-    export SLURM_VERSION=`/opt/slurm/bin/sinfo -V | cut -d " " -f 2`
-    yum install -y gettext
-    envsubst < build.env > build.env.final
-    for os in noble; do
-        pushd $os
-        singularity build --build-arg-file ../build.env.final /opt/rstudio/container/$os.sif r-session-complete.sdef & 
-        popd
-    done
-    wait 
+# Save cleanup function and variables to a shutdown script
+save_cleanup_script() {
+    cat << CLEANUP_EOF > /opt/rstudio/scripts/cleanup.sh
+#!/bin/bash
+exec >> /var/log/head-node-cleanup.log 2>&1
+echo "Running cleanup at \$(date)..."
 
-popd
+HOSTED_ZONE_ID="$HOSTED_ZONE_ID"
+ALB_DNS="$ALB_DNS"
+ALB_HOSTED_ZONE_ID="$ALB_HOSTED_ZONE_ID"
+NLB_DNS="$NLB_DNS"
+NLB_HOSTED_ZONE_ID="$NLB_HOSTED_ZONE_ID"
+LISTENER_ARN="$LISTENER_ARN"
+ALB_ARN="$ALB_ARN"
+TG_ARN="$TG_ARN"
+ALB_SG_ID="$ALB_SG_ID"
 
-# cleanup tempdir
-rm -rf $tempdir
+# Remove Route53 records
+if [ -n "\$ALB_DNS" ] && [ -n "\$ALB_HOSTED_ZONE_ID" ]; then
+    aws route53 change-resource-record-sets \
+        --hosted-zone-id \$HOSTED_ZONE_ID \
+        --change-batch '{
+            "Changes": [{
+                "Action": "DELETE",
+                "ResourceRecordSet": {
+                    "Name": "workbench.pcluster.soleng.posit.it",
+                    "Type": "A",
+                    "AliasTarget": {
+                        "HostedZoneId": "'"\$ALB_HOSTED_ZONE_ID"'",
+                        "DNSName": "'"\$ALB_DNS"'",
+                        "EvaluateTargetHealth": true
+                    }
+                }
+            }]
+        }' 2>/dev/null
+fi
 
+if [ -n "\$NLB_DNS" ] && [ -n "\$NLB_HOSTED_ZONE_ID" ]; then
+    aws route53 change-resource-record-sets \
+        --hosted-zone-id \$HOSTED_ZONE_ID \
+        --change-batch '{
+            "Changes": [{
+                "Action": "DELETE",
+                "ResourceRecordSet": {
+                    "Name": "hpclogin.pcluster.soleng.posit.it",
+                    "Type": "A",
+                    "AliasTarget": {
+                        "HostedZoneId": "'"\$NLB_HOSTED_ZONE_ID"'",
+                        "DNSName": "'"\$NLB_DNS"'",
+                        "EvaluateTargetHealth": true
+                    }
+                }
+            }]
+        }' 2>/dev/null
+fi
+
+# Delete HTTPS listener
+[ -n "\$LISTENER_ARN" ] && aws elbv2 delete-listener --listener-arn \$LISTENER_ARN 2>/dev/null
+
+# Delete ALB
+if [ -n "\$ALB_ARN" ]; then
+    aws elbv2 delete-load-balancer --load-balancer-arn \$ALB_ARN 2>/dev/null
+    aws elbv2 wait load-balancers-deleted --load-balancer-arns \$ALB_ARN 2>/dev/null
+fi
+
+# Delete target group
+[ -n "\$TG_ARN" ] && aws elbv2 delete-target-group --target-group-arn \$TG_ARN 2>/dev/null
+
+# Delete ALB security group
+[ -n "\$ALB_SG_ID" ] && [ "\$ALB_SG_ID" != "None" ] && aws ec2 delete-security-group --group-id \$ALB_SG_ID 2>/dev/null
+
+# Disable systemd timer
+systemctl disable --now sync-alb-targets.timer 2>/dev/null
+
+echo "Cleanup complete at \$(date)"
+CLEANUP_EOF
+    chmod +x /opt/rstudio/scripts/cleanup.sh
+}
+
+# Deploy config files
+
+mkdir -p /opt/rstudio/scripts
+
+aws s3 cp s3://$S3_BUCKET_NAME/alb-cron.sh /opt/rstudio/scripts 
+chmod +x  /opt/rstudio/scripts/alb-cron.sh
+
+# create systemd timer for cron job
+cat << EOF > /etc/systemd/system/sync-alb-targets.service
+# /etc/systemd/system/sync-alb-targets.service
+[Unit]
+Description=Sync ALB targets with NLB
+
+[Service]
+Type=oneshot
+ExecStart=/opt/rstudio/scripts/alb-cron.sh $CLUSTER_NAME pwb-login-nodes-tg
+EOF
+
+cat << EOF > /etc/systemd/system/sync-alb-targets.timer
+# /etc/systemd/system/sync-alb-targets.timer
+[Unit]
+Description=Run ALB sync every 5 minutes
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=5min
+
+[Install]
+WantedBy=timers.target
+EOF
+
+systemctl daemon-reload 
+systemctl enable --now sync-alb-targets.timer
+
+# Deal with Posit Workbench config files
+# We deploy them in /opt/rstudio/etc/rstudio here and then have the login nodes simply copy them from here 
+
+POSIT_CONFIG_DIR=/opt/rstudio/etc/rstudio
+
+mkdir -p $POSIT_CONFIG_DIR
+
+echo "Creating secure-cookie-key"
+echo `uuidgen` > $POSIT_CONFIG_DIR/secure-cookie-key
+chmod 0600 $POSIT_CONFIG_DIR/secure-cookie-key
+
+echo "Create launcher keys"
+openssl genpkey -algorithm RSA -out $POSIT_CONFIG_DIR/launcher.pem -pkeyopt rsa_keygen_bits:2048
+openssl rsa -in $POSIT_CONFIG_DIR/launcher.pem -pubout > $POSIT_CONFIG_DIR/launcher.pub
+chmod 0600 $POSIT_CONFIG_DIR/launcher.pem
+
+echo "Create audited jobs keys"
+openssl genpkey -algorithm RSA -out $POSIT_CONFIG_DIR/audited-jobs-private-key.pem
+openssl rsa -pubout -in $POSIT_CONFIG_DIR/audited-jobs-private-key.pem -out $POSIT_CONFIG_DIR/audited-jobs-public-key.pem
+chmod 0600 $POSIT_CONFIG_DIR/audited-jobs-private-key.pem
+
+aws s3 cp s3://$S3_BUCKET_NAME/etc-rstudio.tgz /tmp 
+
+tar xfz /tmp/etc-rstudio.tgz -C /opt/rstudio 
+
+chmod 0600 $POSIT_CONFIG_DIR/database.conf
+chmod 0600 $POSIT_CONFIG_DIR/audit-database.conf
+
+# Create PWB Audit DB
+yum install -y postgresql
+
+source $POSIT_CONFIG_DIR/database.conf
+
+PGPASSWORD=$password psql -h $host -U $username pwb -c "CREATE DATABASE pwbaudit;" 
+
+touch /opt/rstudio/.db
 
 # Create a DNS alias to point hpclogin.pcluster.soleng.posit.it to the NLB created by AWS PC
 ## Figure out cluster name
@@ -141,11 +264,17 @@ ACM_CERT_ARN=$(aws acm list-certificates \
     --output text)
 
 # Get subnets for the ALB (needs at least 2 AZs)
-ALB_SUBNETS="subnet-08a17fc2026b879b6 subnet-064565abe81486ef5"
+ALB_SUBNETS="$SUBNET_ID $SUBNET_ID2"
+
+# VPC ID
+VPC_ID=$(aws ec2 describe-subnets \
+    --subnet-ids $SUBNET_ID \
+    --query 'Subnets[0].VpcId' \
+    --output text)
 
 # Create security group for ALB
 ALB_SG_ID=$(aws ec2 describe-security-groups \
-    --filters "Name=group-name,Values=pwb-alb-sg" "Name=vpc-id,Values=${POSIT_VPC}" \
+    --filters "Name=group-name,Values=pwb-alb-sg" "Name=vpc-id,Values=${VPC_ID}" \
     --query 'SecurityGroups[0].GroupId' \
     --output text)
 
@@ -154,15 +283,21 @@ if [ "$ALB_SG_ID" == "None" ] || [ -z "$ALB_SG_ID" ]; then
     ALB_SG_ID=$(aws ec2 create-security-group \
         --group-name pwb-alb-sg \
         --description "SG for PWB ALB" \
-        --vpc-id "${POSIT_VPC}" \
+        --vpc-id "${VPC_ID}" \
         --query 'GroupId' \
+        --output text)
+
+    # Get CIDR Range 
+    CIDR_RANGE=$(aws ec2 describe-vpcs \
+        --vpc-ids $VPC_ID \
+        --query 'Vpcs[0].CidrBlock' \
         --output text)
 
     aws ec2 authorize-security-group-ingress \
         --group-id "${ALB_SG_ID}" \
         --protocol tcp \
         --port 443 \
-        --cidr "0.0.0.0/0"
+        --cidr "${CIDR_RANGE}"
 fi
 
 # Create target group with 302 as healthy response
@@ -170,14 +305,14 @@ TG_ARN=$(aws elbv2 create-target-group \
     --name pwb-login-nodes-tg \
     --protocol HTTP \
     --port 8787 \
-    --vpc-id "${POSIT_VPC}" \
+    --vpc-id "${VPC_ID}" \
     --health-check-protocol HTTP \
     --health-check-port 8787 \
     --health-check-path "/" \
     --matcher "HttpCode=302" \
     --target-type instance \
     --query 'TargetGroups[0].TargetGroupArn' \
-    --output text)
+    --output text  | tr -d '\n\r')
 
 # Register EC2 instances to target group
 for EC2_ID in $EC2_IDS; do
@@ -199,6 +334,11 @@ ALB_ARN=$(aws elbv2 create-load-balancer \
 # Wait for ALB to be active
 aws elbv2 wait load-balancer-available --load-balancer-arns $ALB_ARN
 
+# Modify ALB attributes for increased security
+aws elbv2 modify-load-balancer-attributes \
+  --load-balancer-arn $ALB_ARN \
+  --attributes Key=routing.http.drop_invalid_header_fields.enabled,Value=true
+
 # Get ALB DNS name and hosted zone ID
 ALB_DNS=$(aws elbv2 describe-load-balancers \
     --load-balancer-arns $ALB_ARN \
@@ -211,12 +351,18 @@ ALB_HOSTED_ZONE_ID=$(aws elbv2 describe-load-balancers \
     --output text)
 
 # Create HTTPS listener
-aws elbv2 create-listener \
+LISTENER_ARN=$(aws elbv2 create-listener \
     --load-balancer-arn $ALB_ARN \
     --protocol HTTPS \
     --port 443 \
     --certificates CertificateArn=$ACM_CERT_ARN \
-    --default-actions Type=forward,TargetGroupArn=$TG_ARN
+    --default-actions Type=forward,TargetGroupArn=$TG_ARN \
+    --query 'Listeners[0].ListenerArn' \
+    --output text)
+
+aws elbv2 modify-listener \
+  --listener-arn $LISTENER_ARN \
+  --ssl-policy ELBSecurityPolicy-TLS13-1-2-Res-PQ-2025-09
 
 # Create Route53 alias for workbench.pcluster.soleng.posit.it
 aws route53 change-resource-record-sets \
@@ -239,54 +385,44 @@ aws route53 change-resource-record-sets \
 echo "ALB created: $ALB_DNS"
 echo "Workbench available at: https://workbench.pcluster.soleng.posit.it"
 
-mkdir -p /opt/rstudio/scripts
+# Save cleanup script with all variable values baked in
+save_cleanup_script
 
-aws s3 cp s3://$S3_BUCKET_NAME/alb-cron.sh /opt/rstudio/scripts 
-chmod +x  /opt/rstudio/scripts/alb-cron.sh
-
-# create systemd timer for cron job
-cat << EOF > /etc/systemd/system/sync-alb-targets.service
-# /etc/systemd/system/sync-alb-targets.service
+# Create systemd service to run cleanup on shutdown
+cat << EOF > /etc/systemd/system/head-node-cleanup.service
 [Unit]
-Description=Sync ALB targets with NLB
+Description=Clean up AWS resources on head node shutdown
+DefaultDependencies=no
+Before=shutdown.target reboot.target halt.target
 
 [Service]
 Type=oneshot
-ExecStart=/opt/rstudio/scripts/alb-cron.sh $CLUSTER_NAME pwb-login-nodes-tg
-EOF
-
-cat << EOF > /etc/systemd/system/sync-alb-targets.timer
-# /etc/systemd/system/sync-alb-targets.timer
-[Unit]
-Description=Run ALB sync every 5 minutes
-
-[Timer]
-OnBootSec=1min
-OnUnitActiveSec=5min
+ExecStart=/opt/rstudio/scripts/cleanup.sh
+TimeoutStartSec=120
 
 [Install]
-WantedBy=timers.target
+WantedBy=halt.target reboot.target shutdown.target
 EOF
 
-systemctl daemon-reload 
-systemctl enable --now sync-alb-targets.timer
+systemctl daemon-reload
+systemctl enable head-node-cleanup.service
 
-# Deal with Posit Workbench config files
-# We deploy them in /opt/rstudio/etc/rstudio here and then have the login nodes simply copy them from here 
+# Install a couple of singularity/apptainer containers
 
-POSIT_CONFIG_DIR=/opt/rstudio/etc/rstudio
+mkdir -p /opt/rstudio/container
 
-mkdir -p $POSIT_CONFIG_DIR
+mkdir -p /opt/rstudio/container
+pushd $tempdir/singularity-rstudio/data/r-session-complete
+    export SLURM_VERSION=`/opt/slurm/bin/sinfo -V | cut -d " " -f 2`
+    yum install -y gettext
+    envsubst < build.env > build.env.final
+    for os in noble; do
+        cd $os
+        singularity build --build-arg-file ../build.env.final /opt/rstudio/container/$os.sif r-session-complete.sdef &
+        cd ..
+    done
+    wait
+popd
 
-echo `uuidgen` > $POSIT_CONFIG_DIR/secure-cookie-key
-chmod 0600 $POSIT_CONFIG_DIR/secure-cookie-key
-openssl genpkey -algorithm RSA -out $POSIT_CONFIG_DIR/launcher.pem -pkeyopt rsa_keygen_bits:2048
-openssl rsa -in $POSIT_CONFIG_DIR/launcher.pem -pubout > $POSIT_CONFIG_DIR/launcher.pub
-chmod 0600 $POSIT_CONFIG_DIR/launcher.pem
-
-chmod 0600 $POSIT_CONFIG_DIR/database.conf
-chmod 0600 $POSIT_CONFIG_DIR/audit-database.conf
-
-aws s3 cp s3://$S3_BUCKET_NAME/etc-rstudio.tgz /tmp 
-
-tar xfz /tmp/etc-rstudio.tgz -C /opt/rstudio 
+# cleanup tempdir
+rm -rf $tempdir
