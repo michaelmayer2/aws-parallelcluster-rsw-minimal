@@ -185,6 +185,14 @@ tar xfz /tmp/etc-rstudio.tgz -C /opt/rstudio
 chmod 0600 $POSIT_CONFIG_DIR/database.conf
 chmod 0600 $POSIT_CONFIG_DIR/audit-database.conf
 
+# Create PWB Audit DB
+yum install -y postgresql
+
+source $POSIT_CONFIG_DIR/database.conf
+
+PGPASSWORD=$password psql -h $host -U $username pwb -c "CREATE DATABASE pwbaudit;" 
+
+touch /opt/rstudio/.db
 
 # Create a DNS alias to point hpclogin.pcluster.soleng.posit.it to the NLB created by AWS PC
 ## Figure out cluster name
@@ -398,15 +406,6 @@ EOF
 
 systemctl daemon-reload
 systemctl enable head-node-cleanup.service
-
-# Create PWB Audit DB
-yum install -y postgresql
-
-source $POSIT_CONFIG_DIR/database.conf
-
-PGPASSWORD=$password psql -h $host -U $username pwb -c "CREATE DATABASE pwbaudit;" 
-
-touch /opt/rstudio/.db
 
 # Install a couple of singularity/apptainer containers
 
